@@ -6,42 +6,66 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Customers arrive, an order taker issues tickets, a cook prepares them,
- * and a server calls the numbers. Each role is its own loop.
- */
 public final class FastFoodSimulation {
-    /** How long the "order being taken" readout stays visible. */
-    static final int TAKE_ORDER_MS = 350;
-    /** How long a called order number stays on the pickup counter. */
+
+    /** Сколько касс принимают заказы одновременно. */
+    public static final int CASHIER_COUNT = 2;
+
+    /** Сколько поваров готовят одновременно. */
+    public static final int COOK_COUNT = 3;
+
+    /** Сколько миллисекунд касса оформляет один заказ. */
+    static final int TAKE_ORDER_MS = 1050;
+    /** Сколько миллисекунд официант держит номер на табло. */
     static final int ANNOUNCE_MS = 700;
+    /** Сколько последних клиентов показывать в зале. */
     private static final int DINING_LIMIT = 12;
 
+    /** Интервал прихода нового клиента, мс. */
     private final int arrivalIntervalMs;
+    /** Время готовки одного заказа, мс. */
     private final int cookIntervalMs;
+    /** Номер запуска, чтобы окно не рисовало старые события. */
     private final int generation;
+    /** Куда отправлять снимок состояния для окна. */
     private final SimulationListener listener;
 
+    /** Номер следующего клиента. */
     private final AtomicInteger nextCustomerId = new AtomicInteger(1);
+    /** Номер следующего заказа. */
     private final AtomicInteger nextOrderNumber = new AtomicInteger(1);
 
+    /** Клиенты, которые ждут, чтобы сделать заказ. */
     private final List<Customer> orderLine = new LinkedList<Customer>();
+    /** Клиенты, которых кассы обслуживают прямо сейчас. */
+    private final List<Customer> customersAtCounters = new ArrayList<Customer>();
+    /** Клиенты, которые ждут выдачи заказа. */
     private final List<Customer> servingLine = new LinkedList<Customer>();
+    /** Клиенты, которые уже забрали заказ. */
     private final List<Customer> dining = new LinkedList<Customer>();
+    /** Чеки, которые ещё ждут повара. */
     private final List<OrderTicket> kitchenQueue = new LinkedList<OrderTicket>();
+    /** Чеки, которые повара готовят прямо сейчас. */
+    private final List<OrderTicket> preparingOrders = new ArrayList<OrderTicket>();
+    /** Готовые чеки, которые ждут официанта. */
     private final List<OrderTicket> serviceQueue = new LinkedList<OrderTicket>();
+    /** Заказы, которые ещё не забрали. */
     private final List<OrderTicket> activeTickets = new ArrayList<OrderTicket>();
+    /** Замок на общие очереди. */
     private final Object stateLock = new Object();
 
+    /** Идёт ли симуляция. */
     private volatile boolean running;
-    private Integer orderBeingTaken;
-    private Customer customerAtCounter;
-    private OrderTicket preparing;
+    /** Номер, который официант называет сейчас. */
     private Integer pickupOrder;
 
+    /** Поток, который добавляет новых клиентов. */
     private Thread arrivalThread;
-    private Thread orderTakerThread;
-    private Thread cookThread;
+    /** Потоки касс. */
+    private final List<Thread> cashierThreads = new ArrayList<Thread>();
+    /** Потоки поваров. */
+    private final List<Thread> cookThreads = new ArrayList<Thread>();
+    /** Поток официанта. */
     private Thread serverThread;
 
     public FastFoodSimulation(
@@ -51,6 +75,9 @@ public final class FastFoodSimulation {
             SimulationListener listener) {
         if (arrivalIntervalMs <= 0 || cookIntervalMs <= 0) {
             throw new IllegalArgumentException("Intervals must be positive.");
+        }
+        if (CASHIER_COUNT < 1 || COOK_COUNT < 1) {
+            throw new IllegalArgumentException("CASHIER_COUNT and COOK_COUNT must be at least 1.");
         }
         this.arrivalIntervalMs = arrivalIntervalMs;
         this.cookIntervalMs = cookIntervalMs;
@@ -64,40 +91,43 @@ public final class FastFoodSimulation {
         }
         running = true;
         arrivalThread = startThread(new CustomerArrival(), "customer-arrival");
-        orderTakerThread = startThread(new OrderTaker(), "order-taker");
-        cookThread = startThread(new Cook(), "cook");
+        for (int cashierId = 1; cashierId <= CASHIER_COUNT; cashierId++) {
+            cashierThreads.add(startThread(new OrderTaker(cashierId), "cashier-" + cashierId));
+        }
+        for (int cookId = 1; cookId <= COOK_COUNT; cookId++) {
+            cookThreads.add(startThread(new Cook(cookId), "cook-" + cookId));
+        }
         serverThread = startThread(new Server(), "server");
     }
 
     public void stop() {
         running = false;
         interrupt(arrivalThread);
-        interrupt(orderTakerThread);
-        interrupt(cookThread);
+        interruptAll(cashierThreads);
+        interruptAll(cookThreads);
         interrupt(serverThread);
         synchronized (stateLock) {
             stateLock.notifyAll();
         }
         join(arrivalThread);
-        join(orderTakerThread);
-        join(cookThread);
+        joinAll(cashierThreads);
+        joinAll(cookThreads);
         join(serverThread);
         synchronized (stateLock) {
             cancelTickets();
             orderLine.clear();
+            customersAtCounters.clear();
             servingLine.clear();
             dining.clear();
             kitchenQueue.clear();
+            preparingOrders.clear();
             serviceQueue.clear();
             activeTickets.clear();
-            orderBeingTaken = null;
-            customerAtCounter = null;
-            preparing = null;
             pickupOrder = null;
         }
         arrivalThread = null;
-        orderTakerThread = null;
-        cookThread = null;
+        cashierThreads.clear();
+        cookThreads.clear();
         serverThread = null;
     }
 
@@ -119,6 +149,12 @@ public final class FastFoodSimulation {
         }
     }
 
+    private static void interruptAll(List<Thread> threads) {
+        for (int i = 0; i < threads.size(); i++) {
+            interrupt(threads.get(i));
+        }
+    }
+
     private static void join(Thread thread) {
         if (thread == null) {
             return;
@@ -127,6 +163,12 @@ public final class FastFoodSimulation {
             thread.join(2000);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void joinAll(List<Thread> threads) {
+        for (int i = 0; i < threads.size(); i++) {
+            join(threads.get(i));
         }
     }
 
@@ -139,12 +181,6 @@ public final class FastFoodSimulation {
         }
     }
 
-    /**
-     * prepared: the cook completes this promise. Its callback is the only way
-     * a ticket reaches the service queue, so the server waits on the cook.
-     * readyForPickup: the server completes this promise when the number is called.
-     * Its callback moves that customer from the serving line into the dining area.
-     */
     private void wirePromises(final OrderTicket ticket, final Customer customer) {
         ticket.getPrepared().whenComplete((done, error) -> {
             if (error != null || done == null) {
@@ -183,19 +219,31 @@ public final class FastFoodSimulation {
         return new ViewState(
                 generation,
                 orderLine.size(),
-                orderBeingTaken,
-                customerAtCounter == null ? null : Integer.valueOf(customerAtCounter.getId()),
-                preparing == null ? null : Integer.valueOf(preparing.getNumber()),
+                joinCustomerIds(customersAtCounters),
+                joinCustomerOrders(customersAtCounters),
+                joinTickets(preparingOrders),
                 joinTickets(kitchenQueue),
                 kitchenQueue.size(),
                 pickupOrder,
                 servingLine.size(),
                 personLabels(orderLine, false),
+                counterLabels(customersAtCounters),
+                ticketLabels(preparingOrders),
                 ticketLabels(kitchenQueue),
                 personLabels(servingLine, true),
                 personLabels(dining, true),
                 zone,
                 message);
+    }
+
+    private static List<String> counterLabels(List<Customer> customers) {
+        List<String> labels = new ArrayList<String>();
+        for (int i = 0; i < customers.size(); i++) {
+            Customer customer = customers.get(i);
+            String order = customer.getOrderNumber() == null ? "" : "#" + customer.getOrderNumber();
+            labels.add("C" + customer.getId() + "|" + order);
+        }
+        return labels;
     }
 
     private static List<String> personLabels(List<Customer> customers, boolean withOrder) {
@@ -217,6 +265,43 @@ public final class FastFoodSimulation {
             labels.add("#" + tickets.get(i).getNumber());
         }
         return labels;
+    }
+
+    private static String joinCustomerIds(List<Customer> customers) {
+        if (customers.isEmpty()) {
+            return "\u2014";
+        }
+        StringBuilder text = new StringBuilder();
+        int limit = Math.min(customers.size(), 12);
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append('C').append(customers.get(i).getId());
+        }
+        if (customers.size() > limit) {
+            text.append(", ...");
+        }
+        return text.toString();
+    }
+
+    private static String joinCustomerOrders(List<Customer> customers) {
+        if (customers.isEmpty()) {
+            return "\u2014";
+        }
+        StringBuilder text = new StringBuilder();
+        int limit = Math.min(customers.size(), 12);
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            Integer orderNumber = customers.get(i).getOrderNumber();
+            text.append(orderNumber == null ? "?" : orderNumber.toString());
+        }
+        if (customers.size() > limit) {
+            text.append(", ...");
+        }
+        return text.toString();
     }
 
     private static String joinTickets(List<OrderTicket> tickets) {
@@ -262,10 +347,16 @@ public final class FastFoodSimulation {
     }
 
     private final class OrderTaker implements Runnable {
+        private final int cashierId;
+
+        private OrderTaker(int cashierId) {
+            this.cashierId = cashierId;
+        }
+
         @Override
         public void run() {
             try {
-                while (running && takeNextOrder()) {
+                while (running && takeNextOrder(cashierId)) {
                     // The next customer is handled on the following iteration.
                 }
             } catch (InterruptedException ex) {
@@ -274,7 +365,7 @@ public final class FastFoodSimulation {
         }
     }
 
-    private boolean takeNextOrder() throws InterruptedException {
+    private boolean takeNextOrder(int cashierId) throws InterruptedException {
         Customer customer;
         int number;
         synchronized (stateLock) {
@@ -288,11 +379,11 @@ public final class FastFoodSimulation {
             number = nextOrderNumber.getAndIncrement();
             customer.setOrderNumber(number);
             customer.setPlace(Customer.Place.AT_COUNTER);
-            customerAtCounter = customer;
-            orderBeingTaken = Integer.valueOf(number);
+            customersAtCounters.add(customer);
         }
         publish(
-                "Order taker is taking order #" + number + " from customer " + customer.getId() + ".",
+                "Cashier " + cashierId + " is taking order #" + number
+                        + " from customer " + customer.getId() + ".",
                 ViewState.Zone.ORDER_TAKER);
 
         Thread.sleep(TAKE_ORDER_MS);
@@ -306,8 +397,7 @@ public final class FastFoodSimulation {
             if (!running) {
                 return false;
             }
-            customerAtCounter = null;
-            orderBeingTaken = null;
+            customersAtCounters.remove(customer);
             customer.setPlace(Customer.Place.SERVING_LINE);
             servingLine.add(customer);
             kitchenQueue.add(ticket);
@@ -315,18 +405,25 @@ public final class FastFoodSimulation {
             stateLock.notifyAll();
         }
         publish(
-                "Order #" + number + " goes to the kitchen. Customer " + customer.getId()
+                "Cashier " + cashierId + " sent order #" + number
+                        + " to the kitchen. Customer " + customer.getId()
                         + " waits in the serving line.",
                 ViewState.Zone.KITCHEN);
         return true;
     }
 
     private final class Cook implements Runnable {
+        private final int cookId;
+
+        private Cook(int cookId) {
+            this.cookId = cookId;
+        }
+
         @Override
         public void run() {
             try {
                 while (running) {
-                    cookNext();
+                    cookNext(cookId);
                 }
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
@@ -334,7 +431,7 @@ public final class FastFoodSimulation {
         }
     }
 
-    private void cookNext() throws InterruptedException {
+    private void cookNext(int cookId) throws InterruptedException {
         OrderTicket ticket;
         synchronized (stateLock) {
             while (running && kitchenQueue.isEmpty()) {
@@ -344,9 +441,11 @@ public final class FastFoodSimulation {
                 return;
             }
             ticket = kitchenQueue.remove(0);
-            preparing = ticket;
+            preparingOrders.add(ticket);
         }
-        publish("Cook is preparing order #" + ticket.getNumber() + ".", ViewState.Zone.KITCHEN);
+        publish(
+                "Cook " + cookId + " is preparing order #" + ticket.getNumber() + ".",
+                ViewState.Zone.KITCHEN);
 
         Thread.sleep(cookIntervalMs);
         if (!running) {
@@ -354,12 +453,11 @@ public final class FastFoodSimulation {
         }
 
         synchronized (stateLock) {
-            if (preparing == ticket) {
-                preparing = null;
-            }
+            preparingOrders.remove(ticket);
         }
         publish(
-                "Cook finished order #" + ticket.getNumber() + " and placed it for the server.",
+                "Cook " + cookId + " finished order #" + ticket.getNumber()
+                        + " and placed it for the server.",
                 ViewState.Zone.PICKUP);
         ticket.getPrepared().complete(ticket);
     }

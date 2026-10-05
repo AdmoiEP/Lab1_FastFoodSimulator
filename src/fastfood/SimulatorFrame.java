@@ -26,9 +26,6 @@ import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.BadLocationException;
 
-/**
- * Inputs, readouts required by the lab, and the activity log.
- */
 public class SimulatorFrame extends JFrame implements SimulationListener {
     private static final int MIN_INTERVAL_MS = 100;
     private static final int MAX_INTERVAL_MS = 120_000;
@@ -63,8 +60,10 @@ public class SimulatorFrame extends JFrame implements SimulationListener {
         customersWaitingField.setText("0");
         waitingCountField.setText("0");
         servingCountField.setText("0");
-        waitingOrdersField.setHorizontalAlignment(JTextField.LEADING);
-        waitingOrdersField.setFont(new Font("Consolas", Font.PLAIN, 15));
+        styleList(customerAtCounterField);
+        styleList(orderBeingTakenField);
+        styleList(preparingField);
+        styleList(waitingOrdersField);
 
         logArea.setEditable(false);
         logArea.setFont(new Font("Consolas", Font.PLAIN, 13));
@@ -169,12 +168,12 @@ public class SimulatorFrame extends JFrame implements SimulationListener {
                 "Order line",
                 labeled("Customers waiting to order", customersWaitingField)));
         grid.add(card(
-                "Order taker",
-                labeled("Customer", customerAtCounterField),
-                labeled("Order being taken", orderBeingTakenField)));
+                "Order takers",
+                labeled("Customers at the counters", customerAtCounterField),
+                labeled("Orders being taken", orderBeingTakenField)));
         grid.add(card(
                 "Kitchen",
-                labeled("Order being prepared", preparingField),
+                labeled("Orders being prepared", preparingField),
                 labeled("Waiting orders (next first)", waitingOrdersField),
                 labeled("Waiting count", waitingCountField)));
         grid.add(card(
@@ -208,6 +207,11 @@ public class SimulatorFrame extends JFrame implements SimulationListener {
         panel.add(field, BorderLayout.CENTER);
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
         return panel;
+    }
+
+    private static void styleList(JTextField field) {
+        field.setHorizontalAlignment(JTextField.LEADING);
+        field.setFont(new Font("Consolas", Font.PLAIN, 15));
     }
 
     private static void styleInput(JTextField field) {
@@ -255,8 +259,10 @@ public class SimulatorFrame extends JFrame implements SimulationListener {
         generation++;
         logArea.setText("");
         showMessage(
-                "Simulation is running. A new customer arrives every " + arrival
-                        + " ms. The cook fulfils one order every " + cook + " ms.",
+                "Simulation is running. Cashiers: " + FastFoodSimulation.CASHIER_COUNT
+                        + ". Cooks: " + FastFoodSimulation.COOK_COUNT
+                        + ". A new customer arrives every " + arrival
+                        + " ms. Each cook fulfils one order every " + cook + " ms.",
                 OK);
         setRunningUi(true);
         simulation = new FastFoodSimulation(arrival, cook, generation, this);
@@ -281,11 +287,12 @@ public class SimulatorFrame extends JFrame implements SimulationListener {
             return;
         }
         customersWaitingField.setText(Integer.toString(state.getCustomersWaitingToOrder()));
-        customerAtCounterField.setText(state.getCustomerAtCounter() == null
-                ? DASH
-                : "C" + state.getCustomerAtCounter());
-        orderBeingTakenField.setText(dash(state.getOrderBeingTaken()));
-        preparingField.setText(dash(state.getOrderBeingPrepared()));
+        customerAtCounterField.setText(state.getCustomersAtCountersText());
+        customerAtCounterField.setToolTipText(state.getCustomersAtCountersText());
+        orderBeingTakenField.setText(state.getOrdersBeingTakenText());
+        orderBeingTakenField.setToolTipText(state.getOrdersBeingTakenText());
+        preparingField.setText(state.getOrdersBeingPreparedText());
+        preparingField.setToolTipText(state.getOrdersBeingPreparedText());
         waitingOrdersField.setText(state.getWaitingOrdersText());
         waitingOrdersField.setToolTipText(state.getWaitingOrdersText());
         waitingCountField.setText(Integer.toString(state.getWaitingOrderCount()));

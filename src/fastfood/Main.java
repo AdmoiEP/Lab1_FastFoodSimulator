@@ -13,7 +13,7 @@ public final class Main {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             } catch (Exception ex) {
-                // The default look is used when the system one is unavailable.
+
             }
             UIManager.put("TextField.inactiveBackground", Color.WHITE);
             new SimulatorFrame().setVisible(true);

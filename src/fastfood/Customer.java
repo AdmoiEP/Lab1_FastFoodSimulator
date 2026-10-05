@@ -1,8 +1,6 @@
 package fastfood;
 
-/**
- * A simulated customer moving through the restaurant.
- */
+
 public final class Customer {
     public enum Place {
         ORDER_LINE,

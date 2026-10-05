@@ -11,9 +11,6 @@ import java.awt.Polygon;
 import java.awt.RenderingHints;
 import javax.swing.JPanel;
 
-/**
- * Draws customers as circles and orders as tickets moving through five stations.
- */
 public final class RestaurantView extends JPanel {
     private static final Color PAPER = new Color(244, 241, 234);
     private static final Color CARD = new Color(255, 252, 247);
@@ -56,7 +53,7 @@ public final class RestaurantView extends JPanel {
         int colW = Math.max(40, (getWidth() - margin * 2 - gap * 4) / 5);
         int top = 6;
         int boxH = Math.max(40, getHeight() - 12);
-        String[] titles = {"Order line", "Order taker", "Kitchen", "Pickup", "Dining"};
+        String[] titles = {"Order line", "Order takers", "Kitchen", "Pickup", "Dining"};
         ViewState.Zone[] zones = {
             ViewState.Zone.ORDER_LINE,
             ViewState.Zone.ORDER_TAKER,
@@ -84,12 +81,12 @@ public final class RestaurantView extends JPanel {
             case 0:
                 return state.getCustomersWaitingToOrder() + " waiting";
             case 1:
-                return state.getOrderBeingTaken() == null
+                return state.getCounterLabels().isEmpty()
                         ? "idle"
-                        : "order #" + state.getOrderBeingTaken();
+                        : state.getCounterLabels().size() + " at work";
             case 2:
-                if (state.getOrderBeingPrepared() != null) {
-                    return "cooking #" + state.getOrderBeingPrepared();
+                if (!state.getPreparingLabels().isEmpty()) {
+                    return state.getPreparingLabels().size() + " cooking";
                 }
                 return state.getWaitingOrderCount() + " waiting";
             case 3:
@@ -143,29 +140,40 @@ public final class RestaurantView extends JPanel {
     }
 
     private void drawCounter(Graphics2D g2, int width, int height) {
-        if (state.getCustomerAtCounter() == null) {
+        if (state.getCounterLabels().isEmpty()) {
             drawMuted(g2, "Waiting for a customer", 10, 78);
             return;
         }
-        drawPerson(g2, "C" + state.getCustomerAtCounter() + "|", 12, 56, COUNTER);
-        if (state.getOrderBeingTaken() != null) {
-            drawTicket(g2, "#" + state.getOrderBeingTaken(), 68, 64, 70, 30, COUNTER);
-        }
-        if (height > 140) {
-            drawMuted(g2, "Writing the receipt", 10, 130);
-        }
+        drawPeople(g2, state.getCounterLabels(), 6, 48, width - 12, height - 56, COUNTER);
     }
 
     private void drawKitchen(Graphics2D g2, int width, int height) {
-        if (state.getOrderBeingPrepared() == null) {
-            drawMuted(g2, "Nothing on the stove", 10, 70);
+        int y = 48;
+        java.util.List<String> cooking = state.getPreparingLabels();
+        if (cooking.isEmpty()) {
+            drawMuted(g2, "Nothing on the stove", 10, y + 16);
+            y += 28;
         } else {
-            drawTicket(g2, "Cook #" + state.getOrderBeingPrepared(), 10, 52, Math.min(120, width - 20), 30, STOVE);
+            int band = ticketBandHeight(cooking.size(), width - 20);
+            drawTickets(g2, cooking, 10, y, width - 20, band, STOVE);
+            y += band + 4;
+        }
+        if (y + 20 >= height) {
+            return;
         }
         g2.setFont(getFont().deriveFont(Font.PLAIN, 11f));
         g2.setColor(MUTED);
-        g2.drawString("Queue (next first)", 10, 104);
-        drawTickets(g2, state.getKitchenTicketLabels(), 10, 112, width - 20, height - 122, TICKET);
+        g2.drawString("Queue (next first)", 10, y + 12);
+        drawTickets(g2, state.getKitchenTicketLabels(), 10, y + 18, width - 20, height - (y + 22), TICKET);
+    }
+
+    private int ticketBandHeight(int count, int width) {
+        int chipW = 52;
+        int chipH = 26;
+        int gap = 6;
+        int cols = Math.max(1, (width + gap) / (chipW + gap));
+        int rows = Math.max(1, (count + cols - 1) / cols);
+        return rows * (chipH + gap);
     }
 
     private void drawPickup(Graphics2D g2, int width, int height) {
